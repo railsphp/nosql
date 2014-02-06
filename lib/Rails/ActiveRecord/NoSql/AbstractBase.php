@@ -11,9 +11,13 @@ abstract class AbstractBase
         'between', 'like', 'alike'
     ];
     
+    protected $isNewRecord = true;
+    
+    protected $isDestroyed = false;
+    
     protected $attributes = [];
     
-    private $isNewRecord = true;
+    protected $loadedAssociations = [];
     
     static public function services()
     {
@@ -49,7 +53,7 @@ abstract class AbstractBase
     
     static public function create(array $params)
     {
-        $cn = get_called_class();
+        $cn     = get_called_class();
         $record = new $cn($params);
         $record->save();
     }
@@ -81,6 +85,11 @@ abstract class AbstractBase
         }
     }
     
+    public function __set($prop, $value)
+    {
+        $this->attributes[$prop] = $value;
+    }
+    
     public function attributes()
     {
         return $this->attributes;
@@ -95,15 +104,96 @@ abstract class AbstractBase
     public function save()
     {
         if ($this->isNewRecord) {
-            $this->createRecord();
+            if ($ret = $this->createRecord()) {
+                $this->isNewRecord = false;
+            }
+            return $ret;
         } else {
-            
+            return $this->updateRecord();
         }
     }
     
-    private function createRecord()
+    public function destroy()
     {
-        self::connection()->insert(static::tableName(), $this->attributes);
-        $this->isNewRecord = false;
+        if ($this->destroyRecord()) {
+            $this->isDestroyed = true;
+            return true;
+        }
+        return false;
+    }
+    
+    public function isPersisted()
+    {
+        return !($this->isNewRecord || $this->isDestroyed);
+    }
+    
+    protected function associations()
+    {
+        return [];
+    }
+    
+    protected function getAssociation($assocName)
+    {
+        if (!array_key_exists($assocName, $this->loadedAssociations)) {
+            $assoc  = null;
+            $assocs = $this->normalizeAssociations();
+            foreach ($assocs as $kind => $params) {
+                foreach ($params as $attrName => $options) {
+                    if ($attrName == $assocName) {
+                        $assoc = $this->loadAssociation($kind, $attrName, $options);
+                    }
+                }
+            }
+            $this->loadedAssociations[$assocName] = $assoc;
+        }
+        return $this->loadedAssociations[$assocName];
+    }
+    
+    /**
+     * Logic regarding associations loading.
+     */
+    protected function loadAssociation($type, $attrName, array $options)
+    {
+    }
+    
+    protected function createRecord()
+    {
+        return self::connection()->insert(static::tableName(), $this->attributes);
+    }
+    
+    protected function updateRecord()
+    {
+        return self::connection()->update(static::tableName(), ['id' => $this->id()], $this->attributes());
+    }
+    
+    /**
+     * @return bool
+     */
+    protected function destroyRecord()
+    {
+        return self::connection()->delete(static::tableName(), ['id' => $this->id()]);
+    }
+    
+    protected function normalizeAssociations()
+    {
+        $normalized = [];
+        foreach ($this->associations() as $kind => $params) {
+            $normalized[$kind] = [];
+            foreach ($params as $attrName => $options) {
+                if (is_int($attrName)) {
+                    $attrName = $options;
+                    $options  = [];
+                } elseif (!is_array($options)) {
+                    throw new Exception\RuntimeException(
+                        sprintf(
+                            'Associations options must be array, %s passed',
+                            gettype($options)
+                        )
+                    );
+                }
+                $normalized[$kind][$attrName] = $options;
+            }
+        }
+        return $normalized;
     }
 }

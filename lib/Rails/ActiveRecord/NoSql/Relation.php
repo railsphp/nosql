@@ -65,10 +65,11 @@ class Relation extends Query\Select implements \IteratorAggregate
         return $this->records;
     }
     
-    public function load()
+    public function load(array $options = [])
     {
         if (!$this->loaded) {
-            $this->records = $this->connection->select($this);
+            list($criteria, $queryOptions) = $this->connection->parseQuery($this);
+            $this->records = $this->connection->select($this->getFrom(), $criteria, $queryOptions, $options);
             $this->loaded  = true;
         }
         return $this;

@@ -31,9 +31,9 @@ class ModelRelation extends Relation
         }
     }
     
-    public function load()
+    public function load(array $options = [])
     {
-        parent::load();
+        parent::load($options);
         
         $models = [];
         if ($this->records) {

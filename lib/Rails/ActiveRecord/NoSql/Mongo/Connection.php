@@ -7,8 +7,6 @@ class Connection extends \Rails\ActiveRecord\NoSql\AbstractConnection
 {
     protected $database;
     
-    protected $query;
-    
     public function __construct(array $config = [])
     {
         if (!isset($config['server'])) {
@@ -18,64 +16,51 @@ class Connection extends \Rails\ActiveRecord\NoSql\AbstractConnection
             $config['options'] = [];
         }
         $this->resource = new \MongoClient($config['server'], $config['options']);
+        
+        if (isset($config['dbname'])) {
+            $this->selectDb($config['dbname']);
+        }
     }
     
     public function selectDb($dbName)
     {
         $this->database = $this->resource->selectDb($dbName);
+        $this->dbName   = $dbName;
     }
     
-    public function select(Query\Select $query)
+    public function database()
     {
-        $this->query = $query->getWhere();
-        
-        foreach ($query->getWhereNot() as $key => $value) {
-            $this->addToQuery($key, ['$ne' => $value]);
-        }
-        foreach ($query->getNot() as $key => $value) {
-            $this->addToQuery($key, ['$not' => $value]);
-        }
-        foreach ($query->getGreaterThan() as $key => $value) {
-            $this->addToQuery($key, ['$gt' => $value]);
-        }
-        foreach ($query->getLowerThan() as $key => $value) {
-            $this->addToQuery($key, ['$lt' => $value]);
-        }
-        foreach ($query->getEqualOrGreaterThan() as $key => $value) {
-            $this->addToQuery($key, ['$gte' => $value]);
-        }
-        foreach ($query->getEqualOrLowerThan() as $key => $value) {
-            $this->addToQuery($key, ['$lte' => $value]);
-        }
-        foreach ($query->getBetween() as $key => $value) {
-            $this->addToQuery($key, ['$gte' => $value[0], '$lte' => $value[1]]);
-        }
-        foreach ($query->getLike() as $key => $value) {
-            $this->query[$key] = new \MongoRegex($value);
-        }
-        foreach ($query->getAlike() as $key => $value) {
-            $this->query[$key] = ['$not' => new \MongoRegex($value)];
+        return $this->database;
+    }
+    
+    public function dbName()
+    {
+        return $this->dbName;
+    }
+    
+    public function select($tableName, array $criteria, array $queryOptions = [], array $options = [])
+    {
+        if (!isset($options['fields'])) {
+            $options['fields'] = [];
         }
         
-        $collection = new \MongoCollection($this->database, $query->getFrom());
-        $cursor     = $collection->find($this->query);
+        $collection = $this->database->selectCollection($tableName);
+        $cursor     = $collection->find($criteria, $options['fields']);
         
-        foreach (array_reverse($query->getOrder()) as $order) {
+        foreach (array_reverse($queryOptions['order']) as $order) {
             $cursor->sort($order);
         }
         
-        if ($query->getPage() && $query->getLimit()) {
-            if ($skip = ($query->getPage() - 1) * $query->getLimit()) {
+        if ($queryOptions['page'] && $queryOptions['limit']) {
+            if ($skip = ($queryOptions['page'] - 1) * $queryOptions['limit']) {
                 $cursor->skip($skip);
             }
-        } elseif ($query->getOffset()) {
-            $cursor->skip($query->getOffset());
+        } elseif ($queryOptions['offset']) {
+            $cursor->skip($queryOptions['offset']);
         }
-        if ($query->getLimit()) {
-            $cursor->limit($query->getLimit());
+        if ($queryOptions['limit']) {
+            $cursor->limit($queryOptions['limit']);
         }
-        
-        $this->query = null;
         
         return iterator_to_array($cursor);
     }
@@ -83,22 +68,64 @@ class Connection extends \Rails\ActiveRecord\NoSql\AbstractConnection
     public function insert($tableName, array $attributes, array $options = [])
     {
         $collection = $this->database->selectCollection($tableName);
+        # TODO: Handle 'w' option if present.
         return $collection->insert($attributes, $options);
     }
     
-    public function update()
+    public function update($tableName, array $criteria, array $data, array $options = [])
     {
+        $collection = $this->database->selectCollection($tableName);
+        # TODO: Handle 'w' option if present.
+        return $collection->save($data, $options);
     }
     
-    public function delete()
+    public function delete($tableName, array $criteria, array $options = [])
     {
+        $collection = $this->database->selectCollection($tableName);
+        # TODO: Handle 'w' option if present.
+        return $collection->remove($criteria, $options);
     }
     
-    protected function addToQuery($key, array $params)
+    public function queryToArray(Query\Select $query)
     {
-        if (!isset($this->query[$key])) {
-            $this->query[$key] = [];
+        $parsed = $query->getWhere();
+        
+        foreach ($query->getWhereNot() as $key => $value) {
+            $this->addToQuery($parsed, $key, ['$ne' => $value]);
         }
-        $this->query[$key] = array_merge($this->query[$key], $params);
+        foreach ($query->getNot() as $key => $value) {
+            $this->addToQuery($parsed, $key, ['$not' => $value]);
+        }
+        foreach ($query->getGreaterThan() as $key => $value) {
+            $this->addToQuery($parsed, $key, ['$gt' => $value]);
+        }
+        foreach ($query->getLowerThan() as $key => $value) {
+            $this->addToQuery($parsed, $key, ['$lt' => $value]);
+        }
+        foreach ($query->getEqualOrGreaterThan() as $key => $value) {
+            $this->addToQuery($parsed, $key, ['$gte' => $value]);
+        }
+        foreach ($query->getEqualOrLowerThan() as $key => $value) {
+            $this->addToQuery($parsed, $key, ['$lte' => $value]);
+        }
+        foreach ($query->getBetween() as $key => $value) {
+            $this->addToQuery($parsed, $key, ['$gte' => $value[0], '$lte' => $value[1]]);
+        }
+        foreach ($query->getLike() as $key => $value) {
+            $parsed[$key] = new \MongoRegex($value);
+        }
+        foreach ($query->getAlike() as $key => $value) {
+            $parsed[$key] = ['$not' => new \MongoRegex($value)];
+        }
+        
+        return $parsed;
+    }
+    
+    protected function addToQuery(&$query, $key, array $params)
+    {
+        if (!isset($query[$key])) {
+            $query[$key] = [];
+        }
+        $query[$key] = array_merge($query[$key], $params);
     }
 }
