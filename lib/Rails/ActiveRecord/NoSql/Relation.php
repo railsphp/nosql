@@ -45,6 +45,12 @@ class Relation extends Query\Select implements \IteratorAggregate
         return $this->records;
     }
     
+    public function records()
+    {
+        $this->load();
+        return $this->records;
+    }
+    
     /**
      * @throw Exception\RuntimeException
      */

@@ -90,6 +90,15 @@ class Connection extends \Rails\ActiveRecord\NoSql\AbstractConnection
     {
         $parsed = $query->getWhere();
         
+        /**
+         * Automatically convert "id" to "_id" in
+         * queries like `$query->where(['id' => $id])`.
+         */
+        if (isset($parsed['id'])) {
+            $parsed['_id'] = (int)$parsed['id'];
+            unset($parsed['id']);
+        }
+        
         foreach ($query->getWhereNot() as $key => $value) {
             $this->addToQuery($parsed, $key, ['$ne' => $value]);
         }

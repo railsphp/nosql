@@ -56,6 +56,7 @@ abstract class AbstractBase
         $cn     = get_called_class();
         $record = new $cn($params);
         $record->save();
+        return $record;
     }
     
     static public function find($id)
@@ -78,16 +79,17 @@ abstract class AbstractBase
         return $relation;
     }
     
-    public function __construct(array $attributes = [])
+    public function __construct(array $attributes = [], $isNewRecord = true)
     {
         if ($attributes) {
             $this->assignAttributes($attributes);
         }
+        $this->isNewRecord = (bool)$isNewRecord;
     }
     
     public function __set($prop, $value)
     {
-        $this->attributes[$prop] = $value;
+        return $this->setAttribute($prop, $value);
     }
     
     public function attributes()
@@ -99,6 +101,33 @@ abstract class AbstractBase
     {
         $this->attributes = $attributes;
         return $this;
+    }
+    
+    public function setAttribute($attrName, $value)
+    {
+        $this->attributes[$attrName] = $value;
+        return $this;
+    }
+    
+    public function getAttribute($attrName)
+    {
+        if (isset($this->attributes[$attrName])) {
+            return $this->attributes[$attrName];
+        }
+        return null;
+    }
+    
+    public function updateAttribute($attrName, $value)
+    {
+        return $this->setAttribute($attrName, $value)->save();
+    }
+    
+    public function updateAttributes(array $attributes)
+    {
+        foreach ($attributes as $attrName => $value) {
+            $this->setAttribute($attrName, $value);
+        }
+        return $this->save();
     }
     
     public function save()
@@ -127,9 +156,75 @@ abstract class AbstractBase
         return !($this->isNewRecord || $this->isDestroyed);
     }
     
+    public function isNewRecord()
+    {
+        return $this->isNewRecord;
+    }
+    
+    public function isDestroyed()
+    {
+        return $this->isDestroyed;
+    }
+    
+    public function runCallbacks($name, \Closure $block = null)
+    {
+        $callbacks = $this->normalizedCallbacks();
+        
+        if (!$this->runCallbackKind($name, 'before', $callbacks)) {
+            return false;
+        }
+        
+        if ($block) {
+            $block();
+        }
+        
+        $this->runCallbackKind($name, 'after', $callbacks);
+        return true;
+    }
+    
     protected function associations()
     {
         return [];
+    }
+    
+    protected function callbacks()
+    {
+        return [];
+    }
+    
+    protected function normalizedCallbacks()
+    {
+        $cb = $this->callbacks();
+        $normalized = [];
+        foreach ($cb as $kind => $callbacks) {
+            $normCbs = [];
+            foreach ($callbacks as $name => $options) {
+                if (is_int($name)) {
+                    $name = $options;
+                    $options = [];
+                }
+                $normCbs[$name] = $options;
+            }
+            $normalized[$kind] = $normCbs;
+        }
+        return $normalized;
+    }
+    
+    protected function runCallbackKind($name, $kind, array $callbacks)
+    {
+        # TODO: services
+        $inflector = \Rails::services()->get('inflector');
+        $key = $inflector->camelize($kind . '_' . $name, false);
+        
+        if (isset($callbacks[$key])) {
+            foreach ($callbacks[$key] as $methodName => $options) {
+                $ret = $this->$methodName();
+                if ($kind == 'before' && $ret === false) {
+                    return false;
+                }
+            }
+        }
+        return true;
     }
     
     protected function getAssociation($assocName)
@@ -152,18 +247,22 @@ abstract class AbstractBase
     /**
      * Logic regarding associations loading.
      */
-    protected function loadAssociation($type, $attrName, array $options)
+    protected function loadAssociation($kind, $attrName, array $options)
     {
     }
     
     protected function createRecord()
     {
-        return self::connection()->insert(static::tableName(), $this->attributes);
+        return $this->runCallbacks('create', function() {
+            return self::connection()->insert(static::tableName(), $this->attributes);
+        });
     }
     
     protected function updateRecord()
     {
-        return self::connection()->update(static::tableName(), ['id' => $this->id()], $this->attributes());
+        return $this->runCallbacks('update', function() {
+            return self::connection()->update(static::tableName(), ['id' => $this->id()], $this->attributes());
+        });
     }
     
     /**
@@ -171,7 +270,9 @@ abstract class AbstractBase
      */
     protected function destroyRecord()
     {
-        return self::connection()->delete(static::tableName(), ['id' => $this->id()]);
+        return $this->runCallbacks('destroy', function() {
+            return self::connection()->delete(static::tableName(), ['id' => $this->id()]);
+        });
     }
     
     protected function normalizeAssociations()

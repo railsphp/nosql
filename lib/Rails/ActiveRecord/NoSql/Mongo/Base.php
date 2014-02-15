@@ -65,33 +65,42 @@ abstract class Base extends \Rails\ActiveRecord\NoSql\AbstractBase
         return [];
     }
     
-    protected function getAssociation($assocName)
-    {
-
-    }
-    
     protected function loadAssociation($kind, $attrName, array $options)
     {
         if (!isset($options['className'])) {
-            $assocClass = $this->resolveAssociationClass($attrName);
+            $remoteClass = $this->resolveAssociationClass($attrName);
         } else {
-            $assocClass = $options['className'];
+            $remoteClass = $options['className'];
         }
+        
         $infl = self::services()->get('inflector');
+        
+        $foreignKey = $infl->singularize(static::tableName()) . '_id';
         
         switch ($kind) {
             case 'hasMany':
-                $ref = \MongoDBRef::create(
-                    static::connection()->database()->selectCollection(static::tableName()),
-                    $this->id()
-                );
-                $many = \MongoDBRef::get($ref);
-                // $remoteClass = $options['className'];
-                // $query = $remoteClass::where([
-                // $many = [];
-                // foreach ($this->$attrName as $ref) {
-                    // \MongoDBRef::get(static::connection()->database(), $attrName);
-                // }
+                if (isset($this->attributes[$attrName]) && is_array($this->attributes[$attrName])) {
+                    /**
+                     * If the attribute is present and it is an array, it is assumed
+                     * it's an array of references.
+                     * Missing records are ignored.
+                     */
+                    $assoc = new \Rails\ActiveRecord\Collection();
+                    foreach ($this->attributes[$attrName] as $ref) {
+                        if ($record = $remoteClass::where(['_id' => (int)$ref['$id']])->first()) {
+                            $assoc[] = $record;
+                        }
+                    }
+                } else {
+                    /**
+                     * Fetch the models from the associated collection.
+                     * Note that the documents must have a {referenced_table_name}_id
+                     * key (like "user_id") holding a reference to this record.
+                     */
+                    $assoc = $remoteClass::where([
+                        $foreignKey . '.$id' => $this->id()
+                    ])->records();
+                }
                 break;
             
             case 'belongsTo':
@@ -111,7 +120,7 @@ abstract class Base extends \Rails\ActiveRecord\NoSql\AbstractBase
                 
                 $refData = \MongoDBRef::get(static::connection()->database(), $this->attributes[$refAttr]);
                 if ($refData) {
-                    $assoc = new $assocClass($refData);
+                    $assoc = new $remoteClass($refData);
                     $assoc->isNewRecord = false;
                 }
                 break;
@@ -125,60 +134,66 @@ abstract class Base extends \Rails\ActiveRecord\NoSql\AbstractBase
      */
     protected function createRecord()
     {
-        $attributes = $this->attributes();
-        $infl = self::services()->get('inflector');
-        
-        $associations = $this->normalizeAssociations();
-        if (isset($associations['belongsTo'])) {
-            foreach ($associations['belongsTo'] as $attrName => $options) {
-                $refAttr = $infl->underscore($attrName) . '_id';
-                
-                if (isset($this->attributes[$refAttr])) {
-                    switch (true) {
-                        case (
-                            is_scalar($this->attributes[$refAttr]) &&
-                            ctype_digit((string)$this->attributes[$refAttr])
-                        ) :
-                            # String or int; referencing id.
-                            if (!isset($options['className'])) {
-                                $options['className'] = $this->resolveAssociationClass($attrName);
-                            }
-                            $remoteClass = $options['className'];
-                            $remoteColl  = $remoteClass::tableName();
-                            $ref = \MongoDBRef::create($remoteColl, (int)$this->attributes[$refAttr], static::connection()->dbName());
-                            $this->attributes[$refAttr] = $ref;
-                            break;
-                        
-                        case is_array($this->attributes[$refAttr]):
-                            # It's assumed the reference was already created.
-                            break;
-                        
-                        default:
-                            throw new Exception\RuntimeException(
-                                srptinf(
-                                    "Association attribute '%s' must be either numeric or array, '%s' passed",
-                                    $refAttr,
-                                    gettype($this->attributes[$refAttr])
-                                )
-                            );
-                            break;
+        return $this->runCallbacks('create', function() {
+            $attributes = $this->attributes();
+            $infl = self::services()->get('inflector');
+            
+            $associations = $this->normalizeAssociations();
+            if (isset($associations['belongsTo'])) {
+                foreach ($associations['belongsTo'] as $attrName => $options) {
+                    $refAttr = $infl->underscore($attrName) . '_id';
+                    
+                    if (isset($this->attributes[$refAttr])) {
+                        switch (true) {
+                            case (
+                                is_scalar($this->attributes[$refAttr]) &&
+                                ctype_digit((string)$this->attributes[$refAttr])
+                            ) :
+                                # String or int; referencing id.
+                                if (!isset($options['className'])) {
+                                    $options['className'] = $this->resolveAssociationClass($attrName);
+                                }
+                                $remoteClass = $options['className'];
+                                $remoteColl  = $remoteClass::tableName();
+                                $ref = \MongoDBRef::create($remoteColl, (int)$this->attributes[$refAttr], static::connection()->dbName());
+                                $this->attributes[$refAttr] = $ref;
+                                break;
+                            
+                            case is_array($this->attributes[$refAttr]):
+                                # It's assumed the reference was already created.
+                                break;
+                            
+                            default:
+                                throw new Exception\RuntimeException(
+                                    srptinf(
+                                        "Association attribute '%s' must be either numeric or array, '%s' passed",
+                                        $refAttr,
+                                        gettype($this->attributes[$refAttr])
+                                    )
+                                );
+                                break;
+                        }
+                    } else {
+                        $this->attributes[$attrName] = null;
                     }
-                } else {
-                    $this->attributes[$attrName] = null;
                 }
             }
-        }
-        return static::connection()->insert(static::tableName(), $this->attributes);
+            return static::connection()->insert(static::tableName(), $this->attributes);
+        });
     }
     
     protected function destroyRecord()
     {
-        return static::connection()->delete(static::tableName(), ['_id' => $this->id()], ['justOne' => true]);
+        return $this->runCallbacks('destroy', function() {
+            return static::connection()->delete(static::tableName(), ['_id' => $this->id()], ['justOne' => true]);
+        });
     }
     
     protected function updateRecord()
     {
-        return static::connection()->update(static::tableName(), ['_id' => $this->id()], $this->attributes());
+        return $this->runCallbacks('update', function() {
+            return static::connection()->update(static::tableName(), ['_id' => $this->id()], $this->attributes());
+        });
     }
     
     /**
@@ -186,6 +201,7 @@ abstract class Base extends \Rails\ActiveRecord\NoSql\AbstractBase
      */
     protected function resolveAssociationClass($name)
     {
+        $name = self::services()->get('inflector')->singularize($name);
         $parts = explode('\\', get_called_class());
         array_pop($parts);
         $parts[] = ucfirst($name);

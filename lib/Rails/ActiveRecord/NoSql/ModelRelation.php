@@ -39,7 +39,7 @@ class ModelRelation extends Relation
         if ($this->records) {
             $modelClass = $this->modelClass;
             foreach (array_values($this->records) as $attributes) {
-                $models[] = new $modelClass($attributes);
+                $models[] = new $modelClass($attributes, false);
             }
         }
         
