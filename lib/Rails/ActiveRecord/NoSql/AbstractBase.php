@@ -8,7 +8,14 @@ abstract class AbstractBase
     static private $RELATION_METHODS = [
         'order', 'offset', 'limit', 'where', 'whereNot', 'not', 
         'greaterThan', 'lowerThan', 'equalOrGreaterThan', 'equalOrLowerThan',
-        'between', 'like', 'alike'
+        'between', 'like', 'alike', 'paginate'
+    ];
+    
+    private static $DATE_ATTRIBUTES = [
+        'created_at',
+        'created_on',
+        'updated_at',
+        'updated_on'
     ];
     
     protected $isNewRecord = true;
@@ -18,6 +25,11 @@ abstract class AbstractBase
     protected $attributes = [];
     
     protected $loadedAssociations = [];
+    
+    static public function dateAttributes()
+    {
+        return self::$DATE_ATTRIBUTES;
+    }
     
     static public function services()
     {
@@ -37,7 +49,7 @@ abstract class AbstractBase
     static public function __callStatic($method, $params)
     {
         if (in_array($method, self::$RELATION_METHODS)) {
-            return self::getRelation($method, $params);
+            return static::getRelation($method, $params);
         }
         throw new \Rails\Exception\BadMethodCallException(
             sprintf("Called to unknown static method %s::%s", get_called_class(), $method)
@@ -61,7 +73,7 @@ abstract class AbstractBase
     
     static public function find($id)
     {
-        $query = self::getRelation('where', [['id' => $id]]);
+        $query = static::getRelation('where', [['id' => $id]]);
         $record = $query->first();
         if (!$record) {
             throw new \Rails\ActiveRecord\Exception\RecordNotFoundException(
@@ -74,8 +86,8 @@ abstract class AbstractBase
     static protected function getRelation($initMethod, array $params)
     {
         $relation = new ModelRelation(static::connection(), get_called_class());
-        call_user_func_array([$relation, $initMethod], $params);
         $relation->from(static::tableName());
+        call_user_func_array([$relation, $initMethod], $params);
         return $relation;
     }
     
