@@ -21,6 +21,24 @@ abstract class Base extends \Rails\ActiveRecord\NoSql\AbstractBase
         return $record;
     }
     
+    static public function connection()
+    {
+        return static::$connection->setModelClass(get_called_class());
+    }
+    
+    public function __construct(array $attributes = [], $isNewRecord = true)
+    {
+        $this->isNewRecord = (bool)$isNewRecord;
+        
+        if (!$this->isNewRecord) {
+            self::castFromDate($attributes);
+        }
+        
+        if ($attributes) {
+            $this->assignAttributes($attributes);
+        }
+    }
+    
     public function attributes()
     {
         $attributes = $this->attributes;
@@ -44,6 +62,7 @@ abstract class Base extends \Rails\ActiveRecord\NoSql\AbstractBase
                     $value = (int)$value;
                 }
             }
+            
             $this->attributes[$name] = $value;
         }
         return $this;
@@ -98,27 +117,26 @@ abstract class Base extends \Rails\ActiveRecord\NoSql\AbstractBase
                      * key (like "user_id") holding a reference to this record.
                      */
                     $assoc = $remoteClass::where([
-                        $foreignKey . '.$id' => $this->id()
-                    ])->records();
+                        $infl->singularize(static::tableName()) . '.$id' => $this->id()
+                    ]);
                 }
                 break;
             
             case 'belongsTo':
-                $refAttr = $infl->underscore($attrName) . '_id';
-                
-                if (!isset($this->attributes[$refAttr])) {
+                if (!isset($this->attributes[$attrName])) {
                     return null;
-                } elseif (!is_array($this->attributes[$refAttr])) {
+                } elseif (!is_array($this->attributes[$attrName])) {
                     throw new Exception\InvalidArgumentException(
                         sprintf(
-                            "Invalid value in attribute '%s' for class '%s' for belongsTo association",
-                            $refAttr,
-                            get_called_class()
+                            "Belongs-to attribute value %s::$%s must be MongoDBRef (array), %s passed",
+                            get_called_class(),
+                            $attrName,
+                            gettype($attrName)
                         )
                     );
                 }
                 
-                $refData = \MongoDBRef::get(static::connection()->database(), $this->attributes[$refAttr]);
+                $refData = \MongoDBRef::get(static::connection()->database(), $this->attributes[$attrName]);
                 if ($refData) {
                     $assoc = new $remoteClass($refData);
                     $assoc->isNewRecord = false;
@@ -135,19 +153,29 @@ abstract class Base extends \Rails\ActiveRecord\NoSql\AbstractBase
     protected function createRecord()
     {
         return $this->runCallbacks('create', function() {
-            $attributes = $this->attributes();
             $infl = self::services()->get('inflector');
             
             $associations = $this->normalizeAssociations();
+            
             if (isset($associations['belongsTo'])) {
+                /**
+                 * Example:
+                 * A reference for model "User" will be saved in the "user" attribute.
+                 * It is check if the "user_id" attribute exists. If it does, the reference
+                 * is created out of that id and stored in the "user" attribute.
+                 * If "user_id" doesn't exist, it is check if the "user" attribute exists and
+                 * is an array. If so, it's assumed the reference was already created.
+                 * If all this fails, an exception is thrown.
+                 */
                 foreach ($associations['belongsTo'] as $attrName => $options) {
-                    $refAttr = $infl->underscore($attrName) . '_id';
+                    $refAttr  = $infl->underscore($attrName);
+                    $refAttrId = $refAttr . '_id';
                     
-                    if (isset($this->attributes[$refAttr])) {
+                    if (isset($this->attributes[$refAttrId])) {
                         switch (true) {
                             case (
-                                is_scalar($this->attributes[$refAttr]) &&
-                                ctype_digit((string)$this->attributes[$refAttr])
+                                is_int($this->attributes[$refAttrId]) ||
+                                is_string($this->attributes[$refAttrId])
                             ) :
                                 # String or int; referencing id.
                                 if (!isset($options['className'])) {
@@ -155,20 +183,20 @@ abstract class Base extends \Rails\ActiveRecord\NoSql\AbstractBase
                                 }
                                 $remoteClass = $options['className'];
                                 $remoteColl  = $remoteClass::tableName();
-                                $ref = \MongoDBRef::create($remoteColl, (int)$this->attributes[$refAttr], static::connection()->dbName());
+                                $ref = \MongoDBRef::create($remoteColl, (int)$this->attributes[$refAttrId], static::connection()->dbName());
                                 $this->attributes[$refAttr] = $ref;
                                 break;
                             
-                            case is_array($this->attributes[$refAttr]):
+                            case isset($this->attributes[$refAttr]) && is_array($this->attributes[$refAttr]):
                                 # It's assumed the reference was already created.
                                 break;
                             
                             default:
                                 throw new Exception\RuntimeException(
                                     srptinf(
-                                        "Association attribute '%s' must be either numeric or array, '%s' passed",
-                                        $refAttr,
-                                        gettype($this->attributes[$refAttr])
+                                        "Failed to create association: neither attribute '%s' and '%s' exist or didn't match conditions",
+                                        $refAttrId,
+                                        $refAttr
                                     )
                                 );
                                 break;
@@ -178,7 +206,11 @@ abstract class Base extends \Rails\ActiveRecord\NoSql\AbstractBase
                     }
                 }
             }
-            return static::connection()->insert(static::tableName(), $this->attributes);
+            
+            self::castToDate($this->attributes, true);
+            $resp = static::connection()->insert(static::tableName(), $this->attributes);
+            self::castFromDate($this->attributes);
+            return $resp;
         });
     }
     
@@ -192,7 +224,9 @@ abstract class Base extends \Rails\ActiveRecord\NoSql\AbstractBase
     protected function updateRecord()
     {
         return $this->runCallbacks('update', function() {
-            return static::connection()->update(static::tableName(), ['_id' => $this->id()], $this->attributes());
+            $attributes = $this->attributes;
+            $this->castToDate($attributes);
+            return static::connection()->update(static::tableName(), ['_id' => $this->id()], $attributes);
         });
     }
     
@@ -206,5 +240,51 @@ abstract class Base extends \Rails\ActiveRecord\NoSql\AbstractBase
         array_pop($parts);
         $parts[] = ucfirst($name);
         return implode('\\', $parts);
+    }
+    
+    static public function castFromDate(array &$attributes)
+    {
+        $dateAttributes = self::allDateFields();
+        foreach (array_intersect_key($attributes, array_fill_keys($dateAttributes, null)) as $name => $value) {
+            if ($value instanceof \MongoDate) {
+                $attributes[$name] = date('Y-m-d H:i:s', $value->sec);
+            }
+        }
+    }
+    
+    static public function castToDate(array &$attributes, $foo = false)
+    {
+        $dateAttributes = self::allDateFields();
+        
+        foreach (array_intersect_key($attributes, array_fill_keys($dateAttributes, null)) as $attrName => $value) {
+            if ($value) {
+                if (!$value instanceof \MongoDate) {
+                    if (!is_int($value)) {
+                        $value = strtotime($value);
+                        if ($value === false) {
+                            throw new Exception\InvalidArgumentException(
+                                sprintf(
+                                    "Invalid value passed to date field %s::%s (%s)",
+                                    get_called_class(),
+                                    $attrName,
+                                    (is_scalar($value) ? $value : gettype($value))
+                                )
+                            );
+                        }
+                    }
+                    $attributes[$attrName] = new \MongoDate($value);
+                }
+            }
+        }
+    }
+    
+    static public function dateFields()
+    {
+        return [];
+    }
+    
+    static public function allDateFields()
+    {
+        return array_merge(self::dateAttributes(), static::dateFields());
     }
 }
