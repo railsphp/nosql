@@ -33,17 +33,37 @@ class ModelRelation extends Relation
     
     public function load(array $options = [])
     {
-        parent::load($options);
-        
-        $models = [];
-        if ($this->records) {
-            $modelClass = $this->modelClass;
-            foreach (array_values($this->records) as $attributes) {
-                $models[] = new $modelClass($attributes, false);
+        if (!$this->loaded) {
+            parent::load($options);
+            
+            $models = [];
+            if ($this->records) {
+                $modelClass = $this->modelClass;
+                foreach (array_values($this->records) as $attributes) {
+                    $models[] = new $modelClass($attributes, false);
+                }
             }
+            
+            $paginationData = [
+                'totalRows' => $this->results[1],
+                'page'      => $this->results[2],
+                'perPage'   => $this->results[3],
+                'offset'    => $this->results[2] * $this->results[3],
+            ];
+            
+            $this->records = new \Rails\ActiveRecord\Collection($models, $paginationData);
         }
-        
-        $this->records = new \Rails\ActiveRecord\Collection($models);
         return $this;
+    }
+    
+    public function any()
+    {
+        $this->load();
+        return $this->records->any();
+    }
+    
+    public function none()
+    {
+        return !$this->any();
     }
 }
