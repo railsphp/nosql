@@ -9,6 +9,8 @@ class Relation extends Query\Select implements \IteratorAggregate
     
     protected $records = [];
     
+    protected $results = [];
+    
     public function __construct(AbstractConnection $connection)
     {
         $this->connection = $connection;
@@ -75,7 +77,8 @@ class Relation extends Query\Select implements \IteratorAggregate
     {
         if (!$this->loaded) {
             list($criteria, $queryOptions) = $this->connection->parseQuery($this);
-            $this->records = $this->connection->select($this->getFrom(), $criteria, $queryOptions, $options);
+            $this->results = $this->connection->select($this->getFrom(), $criteria, $queryOptions, $options);
+            $this->records = $this->results[0];
             $this->loaded  = true;
         }
         return $this;
