@@ -27,9 +27,9 @@ class Select
     
     protected $alike       = [];
     
-    protected $equalOrLowerThan   = [];
+    protected $lowerThanOrEqualTo   = [];
     
-    protected $equalOrGreaterThan = [];
+    protected $greaterThanOrEqualTo = [];
     
     protected $page;
     
@@ -62,7 +62,7 @@ class Select
     
     public function where(array $params)
     {
-        $this->where = array_merge($this->whereNot, $params);
+        $this->where = array_merge($this->where, $params);
         return $this;
     }
     
@@ -96,15 +96,15 @@ class Select
         return $this;
     }
     
-    public function equalOrGreaterThan(array $params)
+    public function greaterThanOrEqualTo(array $params)
     {
-        $this->equalOrGreaterThan = array_merge($this->equalOrGreaterThan, $params);
+        $this->greaterThanOrEqualTo = array_merge($this->greaterThanOrEqualTo, $params);
         return $this;
     }
     
-    public function equalOrLowerThan(array $params)
+    public function lowerThanOrEqualTo(array $params)
     {
-        $this->equalOrLowerThan = array_merge($this->equalOrLowerThan, $params);
+        $this->lowerThanOrEqualTo = array_merge($this->lowerThanOrEqualTo, $params);
         return $this;
     }
     
@@ -184,14 +184,14 @@ class Select
         return $this->lowerThan;
     }
     
-    public function getEqualOrGreaterThan()
+    public function getGreaterThanOrEqualTo()
     {
-        return $this->equalOrGreaterThan;
+        return $this->greaterThanOrEqualTo;
     }
     
-    public function getEqualOrLowerThan()
+    public function getlowerThanOrEqualTo()
     {
-        return $this->equalOrLowerThan;
+        return $this->lowerThanOrEqualTo;
     }
     
     public function getBetween()
