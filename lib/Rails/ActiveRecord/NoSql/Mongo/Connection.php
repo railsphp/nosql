@@ -7,6 +7,8 @@ class Connection extends \Rails\ActiveRecord\NoSql\AbstractConnection
 {
     protected $database;
     
+    protected $modelClass;
+    
     public function __construct(array $config = [])
     {
         if (!isset($config['server'])) {
@@ -20,6 +22,12 @@ class Connection extends \Rails\ActiveRecord\NoSql\AbstractConnection
         if (isset($config['dbname'])) {
             $this->selectDb($config['dbname']);
         }
+    }
+    
+    public function setModelClass($modelClass)
+    {
+        $this->modelClass = $modelClass;
+        return $this;
     }
     
     public function selectDb($dbName)
@@ -47,11 +55,15 @@ class Connection extends \Rails\ActiveRecord\NoSql\AbstractConnection
         $collection = $this->database->selectCollection($tableName);
         $cursor     = $collection->find($criteria, $options['fields']);
         
-        foreach (array_reverse($queryOptions['order']) as $order) {
-            $cursor->sort($order);
-        }
+        $cursor->sort($queryOptions['order']);
+        
+        $totalRecords = $cursor->count();
+        $page    = null;
+        $perPage = null;
         
         if ($queryOptions['page'] && $queryOptions['limit']) {
+            $page    = $queryOptions['page'];
+            $perPage = $queryOptions['limit'];
             if ($skip = ($queryOptions['page'] - 1) * $queryOptions['limit']) {
                 $cursor->skip($skip);
             }
@@ -62,7 +74,12 @@ class Connection extends \Rails\ActiveRecord\NoSql\AbstractConnection
             $cursor->limit($queryOptions['limit']);
         }
         
-        return iterator_to_array($cursor);
+        return [
+            iterator_to_array($cursor),
+            $totalRecords,
+            $page,
+            $perPage
+        ];
     }
     
     public function insert($tableName, array $attributes, array $options = [])
@@ -88,7 +105,9 @@ class Connection extends \Rails\ActiveRecord\NoSql\AbstractConnection
     
     public function queryToArray(Query\Select $query)
     {
+        $modelClass = $this->modelClass;
         $parsed = $query->getWhere();
+        $modelClass::castToDate($parsed);
         
         /**
          * Automatically convert "id" to "_id" in
@@ -99,27 +118,52 @@ class Connection extends \Rails\ActiveRecord\NoSql\AbstractConnection
             unset($parsed['id']);
         }
         
-        foreach ($query->getWhereNot() as $key => $value) {
+        $data = $query->getWhereNot();
+        $modelClass::castToDate($data);
+        foreach ($data as $key => $value) {
             $this->addToQuery($parsed, $key, ['$ne' => $value]);
         }
-        foreach ($query->getNot() as $key => $value) {
+        
+        $data = $query->getNot();
+        $modelClass::castToDate($data);
+        foreach ($data as $key => $value) {
             $this->addToQuery($parsed, $key, ['$not' => $value]);
         }
-        foreach ($query->getGreaterThan() as $key => $value) {
+        
+        $data = $query->getGreaterThan();
+        $modelClass::castToDate($data);
+        foreach ($data as $key => $value) {
             $this->addToQuery($parsed, $key, ['$gt' => $value]);
         }
-        foreach ($query->getLowerThan() as $key => $value) {
+        
+        $data = $query->getLowerThan();
+        $modelClass::castToDate($data);
+        foreach ($data as $key => $value) {
             $this->addToQuery($parsed, $key, ['$lt' => $value]);
         }
-        foreach ($query->getEqualOrGreaterThan() as $key => $value) {
+        
+        $data = $query->getGreaterThanOrEqualTo();
+        $modelClass::castToDate($data);
+        foreach ($data as $key => $value) {
             $this->addToQuery($parsed, $key, ['$gte' => $value]);
         }
-        foreach ($query->getEqualOrLowerThan() as $key => $value) {
+        
+        $data = $query->getlowerThanOrEqualTo();
+        $modelClass::castToDate($data);
+        foreach ($data as $key => $value) {
             $this->addToQuery($parsed, $key, ['$lte' => $value]);
         }
+        
+        $data = $query->getWhereNot();
+        $modelClass::castToDate($data);
         foreach ($query->getBetween() as $key => $value) {
-            $this->addToQuery($parsed, $key, ['$gte' => $value[0], '$lte' => $value[1]]);
+            $pairFirst = [$key => $value[0]];
+            $modelClass::castToDate($pairFirst);
+            $pairSecond = [$key => $value[1]];
+            $modelClass::castToDate($pairSecond);
+            $this->addToQuery($parsed, $key, ['$gte' => $pairFirst[$key], '$lte' => $pairSecond[$key]]);
         }
+        
         foreach ($query->getLike() as $key => $value) {
             $parsed[$key] = new \MongoRegex($value);
         }
@@ -137,4 +181,6 @@ class Connection extends \Rails\ActiveRecord\NoSql\AbstractConnection
         }
         $query[$key] = array_merge($query[$key], $params);
     }
+    
+    
 }
