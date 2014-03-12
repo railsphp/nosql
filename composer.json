@@ -1,0 +1,12 @@
+{
+    "name": "railsphp/nosql",
+    "description": "NoSQL persistance RailsPHP Framework",
+    "autoload": {
+        "psr-0": {
+            "Rails\\ActiveRecord\\NoSql\\": "lib/Rails/ActiveRecord/NoSql/"
+        }
+    },
+    "require": {
+        "php": ">=5.4.0"
+    }
+}
